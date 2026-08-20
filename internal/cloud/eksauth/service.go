@@ -56,9 +56,13 @@ func (s *service) GetIamCredentials(ctx context.Context,
 	log.Info("Calling EKS Auth to fetch credentials")
 
 	startRequestTime := time.Now()
+
 	creds, err := s.eksAuthService.AssumeRoleForPodIdentity(ctx, &eksauth.AssumeRoleForPodIdentityInput{
 		ClusterName: aws.String(request.ClusterName),
 		Token:       aws.String(request.ServiceAccountToken),
+		EksNodeName: nilIfEmpty(request.EksNodeName),
+		InstanceId:  nilIfEmpty(request.InstanceId),
+		Zone:        nilIfEmpty(request.Zone),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to fetch credentials from EKS Auth: %w", err)
@@ -88,4 +92,11 @@ func (s *service) GetIamCredentials(ctx context.Context,
 		AccountId:       parsedArn.AccountID,
 		Expiration:      credentials.SdkCompliantExpirationTime{Time: *creds.Credentials.Expiration},
 	}, responseMetadata(*creds.PodIdentityAssociation.AssociationId), nil
+}
+
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

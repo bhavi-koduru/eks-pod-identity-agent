@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go.amzn.com/eks/eks-pod-identity-agent/internal/test"
@@ -114,6 +115,82 @@ func TestEksCredentialHandler_GetIamCredentialsHandler(t *testing.T) {
 
 		})
 	}
+}
+
+func TestEksCredentialHandler_NodeMetadataPassedToRequest(t *testing.T) {
+	g := NewWithT(t)
+
+	controller := gomock.NewController(t)
+	defer controller.Finish()
+
+	someFutureTime := time.Now().Add(1 * time.Hour)
+	someValidServiceAccountToken := test.CreateToken(t, test.TokenConfig{Expiry: someFutureTime, Iat: time.Now(), Nbf: time.Now()})
+
+	eksAuthService := eksauth.NewMockIface(controller)
+	handler := EksCredentialHandler{
+		CredentialRetriever: eksAuthService,
+		RequestValidator:    validation.DefaultCredentialValidator{},
+		ClusterName:         "test-cluster",
+		EksNodeName:         "ip-10-0-1-42.us-west-2.compute.internal",
+		InstanceId:          "i-0abc123def456",
+		Zone:                "usw2-az1",
+	}
+
+	// Capture the request passed to GetIamCredentials and verify node metadata fields
+	eksAuthService.EXPECT().GetIamCredentials(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, req *credentials.EksCredentialsRequest) (*credentials.EksCredentialsResponse, credentials.ResponseMetadata, error) {
+			g.Expect(req.EksNodeName).To(Equal("ip-10-0-1-42.us-west-2.compute.internal"))
+			g.Expect(req.InstanceId).To(Equal("i-0abc123def456"))
+			g.Expect(req.Zone).To(Equal("usw2-az1"))
+			g.Expect(req.ClusterName).To(Equal("test-cluster"))
+			return &credentials.EksCredentialsResponse{
+				AccessKeyId:     "AKIA...",
+				SecretAccessKey: "secret",
+				Token:           "token",
+				AccountId:       "123456789012",
+				Expiration:      credentials.SdkCompliantExpirationTime{Time: someFutureTime},
+			}, nil, nil
+		})
+
+	request := buildRequest(someValidServiceAccountToken, configuration.DefaultIpv4TargetHost)
+	handler.HandleRequest(&mockResponseWriter{g: g, expectBytes: []byte("AKIA...")}, request)
+}
+
+func TestEksCredentialHandler_EmptyNodeMetadataStillWorks(t *testing.T) {
+	g := NewWithT(t)
+
+	controller := gomock.NewController(t)
+	defer controller.Finish()
+
+	someFutureTime := time.Now().Add(1 * time.Hour)
+	someValidServiceAccountToken := test.CreateToken(t, test.TokenConfig{Expiry: someFutureTime, Iat: time.Now(), Nbf: time.Now()})
+
+	eksAuthService := eksauth.NewMockIface(controller)
+	handler := EksCredentialHandler{
+		CredentialRetriever: eksAuthService,
+		RequestValidator:    validation.DefaultCredentialValidator{},
+		ClusterName:         "test-cluster",
+		EksNodeName:         "",
+		InstanceId:          "",
+		Zone:                "",
+	}
+
+	eksAuthService.EXPECT().GetIamCredentials(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, req *credentials.EksCredentialsRequest) (*credentials.EksCredentialsResponse, credentials.ResponseMetadata, error) {
+			g.Expect(req.EksNodeName).To(BeEmpty())
+			g.Expect(req.InstanceId).To(BeEmpty())
+			g.Expect(req.Zone).To(BeEmpty())
+			return &credentials.EksCredentialsResponse{
+				AccessKeyId:     "AKIA...",
+				SecretAccessKey: "secret",
+				Token:           "token",
+				AccountId:       "123456789012",
+				Expiration:      credentials.SdkCompliantExpirationTime{Time: someFutureTime},
+			}, nil, nil
+		})
+
+	request := buildRequest(someValidServiceAccountToken, configuration.DefaultIpv4TargetHost)
+	handler.HandleRequest(&mockResponseWriter{g: g, expectBytes: []byte("AKIA...")}, request)
 }
 
 func buildRequest(token string, targetHost string) *http.Request {

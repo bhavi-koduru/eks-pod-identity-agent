@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"go.amzn.com/eks/eks-pod-identity-agent/configuration"
+	imdsmetadata "go.amzn.com/eks/eks-pod-identity-agent/internal/cloud/imds"
 	"go.amzn.com/eks/eks-pod-identity-agent/internal/middleware/logger"
 	"go.amzn.com/eks/eks-pod-identity-agent/internal/sharedcredsrotater"
 	"go.amzn.com/eks/eks-pod-identity-agent/pkg/handlers"
@@ -68,7 +69,10 @@ func startServers(pCtx context.Context, cfg aws.Config) {
 	ctx, cancel := context.WithCancel(pCtx)
 	wg := sync.WaitGroup{}
 
-	servers := createServers(cfg)
+	// Fetch node metadata from IMDS at startup
+	nodeMetadata := imdsmetadata.FetchNodeMetadata(ctx, cfg)
+
+	servers := createServers(cfg, nodeMetadata)
 
 	// start servers
 	for _, srv := range servers {
@@ -89,7 +93,7 @@ func startServers(pCtx context.Context, cfg aws.Config) {
 	wg.Wait()
 }
 
-func createServers(cfg aws.Config) []*server.Server {
+func createServers(cfg aws.Config, nodeMetadata *imdsmetadata.NodeMetadata) []*server.Server {
 	servers := make([]*server.Server, len(bindHosts))
 	// listen on all bindHosts
 	for i, ip := range bindHosts {
@@ -101,6 +105,9 @@ func createServers(cfg aws.Config) []*server.Server {
 			MaxCacheSize:       maxCacheSize,
 			RefreshQPS:         refreshQps,
 			EndpointOverridden: overrideEksAuthEndpoint != "",
+			EksNodeName:        nodeMetadata.EksNodeName,
+			InstanceId:         nodeMetadata.InstanceId,
+			Zone:               nodeMetadata.Zone,
 		})
 	}
 

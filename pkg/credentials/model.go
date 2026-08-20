@@ -28,6 +28,9 @@ type EksCredentialsRequest struct {
 	ServiceAccountToken string
 	ClusterName         string
 	RequestTargetHost   string
+	EksNodeName         string
+	InstanceId          string
+	Zone                string
 }
 
 type EksCredentialsResponse struct {

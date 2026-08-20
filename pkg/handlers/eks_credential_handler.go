@@ -28,6 +28,10 @@ type EksCredentialHandler struct {
 	RequestValidator validation.RequestValidator
 	// CredentialRetriever will call EksAuthService to retrieve credentials
 	CredentialRetriever credentials.CredentialRetriever
+	// Node metadata from IMDS
+	EksNodeName string
+	InstanceId  string
+	Zone        string
 }
 
 type EksCredentialHandlerOpts struct {
@@ -37,6 +41,9 @@ type EksCredentialHandlerOpts struct {
 	MaxCacheSize       int
 	RefreshQPS         int
 	EndpointOverridden bool
+	EksNodeName        string
+	InstanceId         string
+	Zone               string
 }
 
 var (
@@ -75,6 +82,9 @@ func NewEksCredentialHandler(opts EksCredentialHandlerOpts) *EksCredentialHandle
 		RequestValidator:    validation.DefaultCredentialValidator{},
 		ClusterName:         opts.ClusterName,
 		CredentialRetriever: credentialsRetriever,
+		EksNodeName:         opts.EksNodeName,
+		InstanceId:          opts.InstanceId,
+		Zone:                opts.Zone,
 	}
 }
 
@@ -92,6 +102,9 @@ func (h *EksCredentialHandler) HandleRequest(resp http.ResponseWriter, req *http
 		ClusterName:         h.ClusterName,
 		ServiceAccountToken: req.Header.Get("Authorization"),
 		RequestTargetHost:   req.Host,
+		EksNodeName:         h.EksNodeName,
+		InstanceId:          h.InstanceId,
+		Zone:                h.Zone,
 	}
 
 	creds, err := h.GetEksCredentials(ctx, eksCredentialsRequest)

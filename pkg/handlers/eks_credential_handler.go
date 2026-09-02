@@ -49,20 +49,28 @@ var (
 )
 
 func NewEksCredentialHandler(opts EksCredentialHandlerOpts) *EksCredentialHandler {
-	ctx := context.Background()
-	ctx = logger.ContextWithField(ctx, "cluster-name", opts.ClusterName)
-	log := logger.FromContext(ctx)
+	credentialsRetriever := eksauth.NewService(opts.Cfg)
 
-	authService := eksauth.NewService(opts.Cfg)
-
-	var imdsSvc credentials.CredentialRetriever
-	if opts.EnableIMDS && imdscloud.ProbeIMDS(ctx, opts.Cfg) {
-		imdsSvc = imdscloud.NewService(ctx, opts.Cfg)
+	// The IMDS credential source is opt-in. When disabled, the agent behaves
+	// exactly as it did before this feature: a single eksauth delegate, no IMDS
+	// probe, no chain. Only when enabled (and IMDS is actually available on the
+	// node) do we build the [IMDS, eksauth] chain.
+	log := logger.FromContext(context.Background())
+	log.Infof("Wiring credential retriever: EnableIMDS flag = %t", opts.EnableIMDS)
+	if opts.EnableIMDS {
+		ctx := logger.ContextWithField(context.Background(), "cluster-name", opts.ClusterName)
+		if imdscloud.ProbeIMDS(ctx, opts.Cfg) {
+			log.Info("IMDS available and picked up: building [imds, eksauth] chained retriever")
+			imdsSvc := imdscloud.NewService(ctx, opts.Cfg)
+			credentialsRetriever = credsretriever.NewChainedRetriever(imdsSvc, credentialsRetriever)
+		} else {
+			log.Info("IMDS NOT available on node: falling back to eksauth-only (no chain)")
+		}
+	} else {
+		log.Info("IMDS disabled by flag: using eksauth-only retriever (no chain)")
 	}
 
-	delegate := buildCredentialChain(imdsSvc, authService)
-
-	tv, err := validation.NewTokenValidator(ctx)
+	tv, err := validation.NewTokenValidator(context.Background())
 	if err != nil {
 		log.Infof("failed to initialize token validator: %v", err)
 	}
@@ -72,7 +80,7 @@ func NewEksCredentialHandler(opts EksCredentialHandlerOpts) *EksCredentialHandle
 
 	if opts.CredentialRenewal != 0 && opts.MaxCacheSize != 0 {
 		retrieverOpts := credsretriever.CachedCredentialRetrieverOpts{
-			Delegate:              delegate,
+			Delegate:              credentialsRetriever,
 			CredentialsRenewalTtl: opts.CredentialRenewal,
 			MaxCacheSize:          opts.MaxCacheSize,
 			RefreshQPS:            opts.RefreshQPS,
@@ -80,29 +88,14 @@ func NewEksCredentialHandler(opts EksCredentialHandlerOpts) *EksCredentialHandle
 		if tv != nil {
 			retrieverOpts.TokenValidator = tv
 		}
-		delegate = credsretriever.NewCachedCredentialRetriever(retrieverOpts)
+		credentialsRetriever = credsretriever.NewCachedCredentialRetriever(retrieverOpts)
 	}
 
 	return &EksCredentialHandler{
 		RequestValidator:    validation.DefaultCredentialValidator{},
 		ClusterName:         opts.ClusterName,
-		CredentialRetriever: delegate,
+		CredentialRetriever: credentialsRetriever,
 	}
-}
-
-// buildCredentialChain constructs a delegate chain in order from the provided retrievers,
-// filtering out any nils. If only one retriever remains, it is returned directly.
-func buildCredentialChain(retrievers ...credentials.CredentialRetriever) credentials.CredentialRetriever {
-	var chain []credentials.CredentialRetriever
-	for _, r := range retrievers {
-		if r != nil {
-			chain = append(chain, r)
-		}
-	}
-	if len(chain) == 1 {
-		return chain[0]
-	}
-	return credsretriever.NewChainedRetriever(chain...)
 }
 
 func (h *EksCredentialHandler) ConfigureHandler(register func(pattern string, handlerFunc http.HandlerFunc)) {
